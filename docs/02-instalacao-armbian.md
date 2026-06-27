@@ -37,7 +37,7 @@ Na página do Armbian Imager, selecione:
 
 ### Passo 1 — Abrir o Armbian Imager
 
-No Linux (Pop!_OS foi o ambiente utilizado neste projeto):
+No Linux:
 
 ```bash
 chmod +x armbian-imager-2.0.2-linux-x86_64.AppImage
@@ -64,10 +64,6 @@ O Armbian Imager permite pré-configurar o sistema antes de gravar, eliminando a
 ### Passo 4 — Gravar
 
 Clique em **"Write"** e aguarde a conclusão.
-
-#### Problema conhecido: Travamento visual no Armbian Imager (Linux + Nvidia)
-
-Durante este projeto, a interface do Armbian Imager travou visualmente após iniciar a gravação — bug conhecido de renderização WebKit em sistemas com GPU Nvidia no Linux. A gravação, no entanto, continuou em background.
 
 **Como confirmar que a gravação foi concluída sem a interface:**
 
@@ -139,23 +135,6 @@ df -h /
 # Memória
 free -h
 ```
-
----
-
-## NetworkManager vs systemd-networkd
-
-A imagem **Minimal** do Armbian utiliza por padrão o `systemd-networkd` com `netplan` para gerenciamento de rede — **não o NetworkManager**. Isso impacta os comandos disponíveis:
-
-| Com NetworkManager | Com systemd-networkd (Minimal) |
-|---|---|
-| `nmcli` | `networkctl` |
-| `nmtui` | `nano /etc/netplan/*.yaml` + `netplan apply` |
-| `rfkill` (binário) | `cat /sys/class/rfkill/*/soft` |
-
-> Para este projeto, o **NetworkManager foi instalado posteriormente** para facilitar a configuração do Wi-Fi e do Access Point:
-> ```bash
-> sudo apt install -y network-manager
-> ```
 
 ---
 
