@@ -63,8 +63,6 @@ sudo apt update
 sudo apt install -y build-essential git dkms linux-headers-current-rockchip
 ```
 
-> **Atenção (específico do Armbian):** O pacote de headers no Armbian **não inclui a versão no nome**. O comando correto é `linux-headers-current-rockchip`, não `linux-headers-6.18.36-current-rockchip`. Este foi um ponto de confusão durante o projeto.
-
 Confirme que os headers estão no lugar certo:
 
 ```bash

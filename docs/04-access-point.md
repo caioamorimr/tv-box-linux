@@ -187,8 +187,6 @@ sudo iptables -A FORWARD -i wlan0 -o end0 -j ACCEPT
 sudo iptables -A FORWARD -i end0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 ```
 
-> **Atenção:** A interface Ethernet neste kernel é `end0`, não `eth0`. Usar `eth0` nas regras de iptables causaria falha silenciosa no NAT (tráfego encaminhado mas não mascarado).
-
 Salvar as regras para persistir após reboot:
 
 ```bash

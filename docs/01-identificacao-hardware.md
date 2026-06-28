@@ -105,8 +105,6 @@ ip link show
 3: wlan0: <BROADCAST,MULTICAST> ...               ← Wi-Fi (requer driver externo)
 ```
 
-> **Atenção:** A interface Ethernet aparece como `end0` (não `eth0`) neste kernel. Este detalhe é importante ao configurar regras de firewall, NAT e roteamento.
-
 ---
 
 ## Diagrama do Hardware
@@ -120,8 +118,8 @@ ip link show
 │  │    ARMv7l  Cortex-A7       │     │
 │  │    32-bit, até 1.4 GHz     │     │
 │  └──────┬─────────────┬───────┘     │
-│         │ SDIO         │ GMAC       │
-│  ┌──────▼──────┐  ┌────▼──────┐     │
+│         │ SDIO        │ GMAC        │
+│  ┌──────▼──────┐  ┌───▼───────┐     │
 │  │  SSV6501P   │  │ Ethernet  │     │
 │  │  Wi-Fi      │  │  (end0)   │     │
 │  │  2.4 GHz    │  │           │     │

@@ -46,7 +46,7 @@ chmod +x armbian-imager-2.0.2-linux-x86_64.AppImage
 
 ### Passo 2 — Selecionar o dispositivo de destino
 
-Insira o cartão microSD e selecione-o no Imager. No ambiente deste projeto, o cartão apareceu como `/dev/mmcblk0` (16 GB físico, 14.8 GB úteis).
+Insira o cartão microSD e selecione-o no Imager.
 
 ### Passo 3 — Configurar o Autoconfig Profile
 
@@ -58,8 +58,6 @@ O Armbian Imager permite pré-configurar o sistema antes de gravar, eliminando a
 - **Wi-Fi Password:** senha da rede Wi-Fi
 - **Timezone:** `America/Sao_Paulo`
 - **IP:** DHCP (deixar dinâmico — mais seguro quando não há monitor)
-
-> **Por que DHCP e não IP estático?** Configurar um IP estático errado sem monitor conectado pode tornar o dispositivo inacessível via SSH. Com DHCP, o roteador atribui um IP e você o descobre pelo painel do roteador ou por um scan de rede (`nmap -sn 192.168.1.0/24`). Após o primeiro acesso, recomenda-se configurar uma **reserva de IP no roteador** (DHCP reservation) pelo MAC address da placa.
 
 ### Passo 4 — Gravar
 
