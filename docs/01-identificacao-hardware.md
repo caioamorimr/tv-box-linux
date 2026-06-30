@@ -2,7 +2,7 @@
 
 ## Visão Geral
 
-O primeiro desafio ao trabalhar com TV Boxes genéricas é identificar com precisão o hardware presente na placa — informação que os fabricantes raramente documentam de forma clara. Esta etapa é fundamental porque determina quais imagens de sistema operacional são compatíveis, quais drivers são necessários e quais limitações existem.
+O primeiro desafio ao trabalhar com TV Boxes genéricas é identificar com precisão o hardware presente na placa, informação que os fabricantes raramente documentam. Esta etapa é fundamental porque determina quais imagens são compatíveis, quais drivers são necessários e quais limitações existem.
 
 ---
 
@@ -12,88 +12,82 @@ O primeiro desafio ao trabalhar com TV Boxes genéricas é identificar com preci
 |---|---|
 | SoC (System on Chip) | Rockchip RK3228A (família RK322x) |
 | Arquitetura | ARMv7l — 32 bits (Cortex-A7) |
-| Chip Wi-Fi | SSV6501P / SV6256P (família SSV6X5X) — barramento SDIO |
-| Interface Ethernet | Embutida no SoC (driver stmmac), identificada como `end0` |
+| Chip Wi-Fi (variante 1) | SSV6501P / SV6256P (família SSV6X5X) — barramento SDIO |
+| Chip Wi-Fi (variante 2) | RSV6200A (Rockchip South Valley) — barramento SDIO |
+| Interface Ethernet | Embutida no SoC (driver stmmac) — identificada como `end0` |
 | Memória RAM | ~1 GB DDR3 |
 | Armazenamento interno | eMMC (continha Android de fábrica) |
-| Armazenamento externo | Slot microSD (utilizado para o Linux) |
-| Kernel em uso | 6.18.36-current-rockchip |
+| Armazenamento externo | Slot microSD (utilizado para instalação inicial) |
+| Kernel em uso | 6.18.x-current-rockchip |
 | Sistema Operacional | Armbian 26.8.0 (base Debian 13 "Trixie") |
 
 ---
 
 ## Como Identificar o SoC RK322x
 
-Em dispositivos sem documentação pública, o SoC pode ser identificado por três métodos:
+### Método 1 — Pelo Android original
 
-### Método 1 — Pelo Android original (antes de instalar Linux)
-
-Acesse **Configurações → Sobre o dispositivo** no Android. Geralmente aparece o modelo da placa ou o SoC na linha "Modelo" ou "Hardware".
+Acesse **Configurações → Sobre o dispositivo**. Geralmente aparece o modelo da placa ou o SoC na linha "Modelo" ou "Hardware".
 
 ### Método 2 — Pelo hostname padrão do Armbian legado
 
-Se o dispositivo já tiver sido usado com Armbian anteriormente, o hostname padrão gerado costuma ser `rk322x` ou `rk322a`, refletindo diretamente o SoC. No caso deste projeto, o hostname encontrado foi `rk322a`, confirmando a família RK322x.
+Se o dispositivo já teve Armbian anteriormente, o hostname costuma ser `rk322x` ou `rk322a`, refletindo diretamente o SoC.
 
-### Método 3 — Pelo kernel em execução no Linux
+### Método 3 — Pelo kernel em execução
 
 ```bash
-# Versão do kernel (confirma a plataforma rockchip)
 uname -r
-# Saída: 6.18.36-current-rockchip
+# 6.18.36-current-rockchip  ← confirma plataforma rockchip
 
-# Modelo da placa via Device Tree
 cat /proc/device-tree/model
 
-# Informações do processador
-cat /proc/cpuinfo | grep -E "Hardware|Processor"
-
-# Sistema operacional
 cat /etc/os-release | head -5
-# Saída:
 # PRETTY_NAME="Armbian_community 26.8.0-trunk.170 trixie"
-# NAME="Debian GNU/Linux"
-# VERSION_ID="13"
 ```
 
 ---
 
-## Identificação do Chip Wi-Fi SSV6X5X
+## ⚠️ Identificar o Chip Wi-Fi ANTES de Instalar Drivers
 
-O chip Wi-Fi é **integrado à placa via barramento SDIO** (não é um adaptador USB removível), tornando-o invisível ao comando `lsusb`. Para identificá-lo:
+Este é o passo mais importante. Mesmo dentro da família RK322x, o chip Wi-Fi varia entre fabricantes e lotes de produção. O driver errado faz o chip falhar silenciosamente.
+
+**Execute antes de qualquer instalação:**
 
 ```bash
-# Verificar qual módulo de driver está sendo carregado
-lsmod | grep -i ssv
+# Carregar temporariamente o ssv6051 (nativo, sempre disponível no kernel)
+sudo modprobe ssv6051
+sleep 3
 
-# Ver mensagens do kernel sobre o chip no boot
-dmesg | grep -iE "ssv|sdio|wlan"
-
-# Listar interfaces de rede
-ip link show
+# Ler o Chip ID
+dmesg | grep -i "chip id" | tail -1
 ```
 
-Saída esperada do `lsmod` após o driver correto estar instalado:
+### Interpretando o resultado
 
-```
-ssv6x5x   512000  0
-mac80211   864256  1 ssv6x5x
-cfg80211   757760  2 mac80211,ssv6x5x
-```
+| Saída do dmesg | Chip | Driver correto | Documentação |
+|---|---|---|---|
+| `CHIP ID: RSV6200A0-...` | RSV6200A | `ssv6051` (nativo) | `03b-driver-wifi-rsv6200a.md` |
+| `CHIP ID: SSV6006C0` ou similar | SSV6501P / SV6256P | `ssv6x5x` (compilar via DKMS) | `03-driver-wifi-ssv6x5x.md` |
 
-### A Família SSV6X5X
-
-Os chips da família SSV6X5X (também grafados SSV6200, SSV6051, SV6152P, SV6256P, SSV6501P) são produzidos pela **iComm Semiconductor (South Silicon Valley)**. Compartilham o mesmo driver de base e são extremamente comuns em TV Boxes genéricas chinesas baseadas em Rockchip RK322x.
-
-**Características críticas para o Linux:**
-
-- Conectam ao SoC via barramento **SDIO** (não USB)
-- O driver original do fabricante foi escrito exclusivamente para o kernel **4.4 (legado Rockchip)**
-- **Não há suporte nativo no kernel mainline** — o chip é invisível sem driver externo
-- O Armbian inclui no kernel um módulo chamado `ssv6051` que **não é compatível** com o SSV6501P/SV6256P e causa conflito grave se carregado simultaneamente
+> O script `01-install-wifi-driver.sh` já faz essa detecção automaticamente.
 
 ---
 
-## Interfaces de Rede Identificadas
+## Variantes de Chip Wi-Fi Conhecidas no RK322x
+
+| Chip | Driver | Compilação | Firmware externo |
+|---|---|---|---|
+| SSV6501P / SV6256P (família SSV6X5X) | `ssv6x5x` | ✅ Via DKMS | ✅ Necessário |
+| RSV6200A (Rockchip South Valley) | `ssv6051` | ❌ Nativo no kernel | ❌ Não necessário |
+
+**Ambos os chips:**
+- Conectam ao SoC via barramento **SDIO** (não USB — invisíveis ao `lsusb`)
+- Não possuem suporte no kernel mainline sem configuração adicional
+- Conflitam entre si se os dois drivers carregarem simultaneamente — blacklist é obrigatório
+
+---
+
+## Como Identificar Interfaces de Rede
 
 ```bash
 ip link show
@@ -102,7 +96,7 @@ ip link show
 ```
 1: lo: <LOOPBACK,UP,LOWER_UP> ...
 2: end0: <BROADCAST,MULTICAST,UP,LOWER_UP> ...    ← Ethernet
-3: wlan0: <BROADCAST,MULTICAST> ...               ← Wi-Fi (requer driver externo)
+3: wlan0: <BROADCAST,MULTICAST> ...               ← Wi-Fi (requer driver configurado)
 ```
 
 ---
@@ -120,9 +114,9 @@ ip link show
 │  └──────┬─────────────┬───────┘     │
 │         │ SDIO        │ GMAC        │
 │  ┌──────▼──────┐  ┌───▼───────┐     │
-│  │  SSV6501P   │  │ Ethernet  │     │
-│  │  Wi-Fi      │  │  (end0)   │     │
-│  │  2.4 GHz    │  │           │     │
+│  │ SSV6501P    │  │ Ethernet  │     │
+│  │ ou RSV6200A │  │  (end0)   │     │
+│  │ Wi-Fi 2.4G  │  │           │     │
 │  └─────────────┘  └───────────┘     │
 │                                     │
 │  ┌──────────┐    ┌──────────────┐   │
@@ -138,4 +132,4 @@ ip link show
 
 - [Armbian — Supported Boards: rk322x-box](https://www.armbian.com/rk322x-box/)
 - [Fórum Armbian — CSC Armbian for RK322x TV box boards](https://forum.armbian.com/topic/34923-csc-armbian-for-rk322x-tv-box-boards/)
-- [Driver comunitário SSV6X5X para kernel 6.x](https://github.com/cdhigh/armbian_sv6256p)
+- [Driver SSV6X5X para kernel 6.x — cdhigh/armbian_sv6256p](https://github.com/cdhigh/armbian_sv6256p)

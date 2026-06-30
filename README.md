@@ -1,6 +1,6 @@
 # TV Box Linux — RK322x
 
-> Documentação completa do processo de **descaracterização de TV Box** com chip Rockchip RK322x: instalação do Armbian/Debian, ativação do driver Wi-Fi SSV6X5X em kernel moderno e configuração de Access Point com compartilhamento de internet.
+> Documentação completa do processo de **descaracterização de TV Box** com chip Rockchip RK322x: instalação do Armbian/Debian, ativação do driver Wi-Fi e configuração de Access Point com compartilhamento de internet.
 
 ---
 
@@ -8,6 +8,7 @@
 
 - [Sobre o Projeto](#sobre-o-projeto)
 - [Hardware](#hardware)
+- [Variantes de Chip Wi-Fi](#variantes-de-chip-wi-fi)
 - [Topologia Final](#topologia-final)
 - [Pré-requisitos](#pré-requisitos)
 - [Quick Start](#quick-start)
@@ -21,9 +22,15 @@
 
 ## Sobre o Projeto
 
-Este projeto documenta o processo de **reaproveitar uma TV Box genérica**, originalmente rodando Android, como um servidor Linux funcional com Access Point Wi-Fi, transformando hardware descartado em infraestrutura de rede útil.
+Este projeto documenta o processo de **reaproveitar TV Boxes genéricas**, originalmente rodando Android, como servidores Linux com Access Point Wi-Fi, transformando hardware descartado em infraestrutura de rede útil.
 
-O principal desafio técnico foi fazer o **chip Wi-Fi onboard funcionar em kernel moderno (6.x)**: o driver original do fabricante foi escrito exclusivamente para o kernel 4.4 legado e não compila em versões superiores. A solução envolveu identificar o conflito de módulos no barramento SDIO, compilar um port comunitário do driver via DKMS e contornar limitações do wpa_supplicant com nl80211.
+Os principais desafios técnicos foram:
+
+1. **Driver Wi-Fi em kernel moderno (6.x):** o driver original do fabricante foi escrito exclusivamente para o kernel 4.4 legado. A solução envolveu detecção automática do chip presente, compilação via DKMS para o chip SSV6X5X, ou uso do driver nativo para o chip RSV6200A.
+
+2. **Variação de hardware:** TV boxes com SoC RK322x aparentemente idênticas por fora podem conter chips Wi-Fi diferentes internamente.
+
+3. **Interferência do NetworkManager:** em alguns casos o NM conectava o `wlan0` como cliente Wi-Fi, impedindo o hostapd de operar em modo AP.
 
 ---
 
@@ -33,13 +40,29 @@ O principal desafio técnico foi fazer o **chip Wi-Fi onboard funcionar em kerne
 |---|---|
 | **SoC** | Rockchip RK3228A (família RK322x) |
 | **Arquitetura** | ARMv7l — 32 bits (Cortex-A7) |
-| **Chip Wi-Fi** | SSV6501P / SV6256P (família SSV6X5X, barramento SDIO) |
 | **Ethernet** | Embutida no SoC — interface `end0` (driver stmmac) |
 | **RAM** | ~1 GB DDR3 |
-| **Armazenamento interno** | eMMC (Android de fábrica — mantido intacto) |
-| **Boot** | Cartão microSD (sistema Linux) |
+| **Armazenamento interno** | eMMC (Android de fábrica — substituído pelo Linux) |
 | **Sistema Operacional** | Armbian 26.8.0 — Debian 13 "Trixie" Minimal |
-| **Kernel** | 6.18.36-current-rockchip |
+| **Kernel** | 6.18.x-current-rockchip |
+
+---
+
+## Variantes de Chip Wi-Fi
+
+> ⚠️ **Importante:** mesmo dentro da família RK322x, o chip Wi-Fi pode variar entre unidades. Identifique o chip antes de instalar qualquer driver.
+
+```bash
+sudo modprobe ssv6051 && sleep 3
+dmesg | grep -i "chip id" | tail -1
+```
+
+| Saída | Chip | Driver | Compilação |
+|---|---|---|---|
+| `CHIP ID: RSV6200A0-...` | RSV6200A | `ssv6051` (nativo) | ❌ Não necessária |
+| `CHIP ID: SSV6006C0` ou similar | SSV6501P / SV6256P | `ssv6x5x` (externo) | ✅ Via DKMS |
+
+O script `01-install-wifi-driver.sh` detecta automaticamente o chip e instala o driver correto.
 
 ---
 
@@ -65,53 +88,51 @@ O principal desafio técnico foi fazer o **chip Wi-Fi onboard funcionar em kerne
 .50.10~.100  via DHCP     via DHCP
 ```
 
-A TV Box recebe internet pelo cabo Ethernet (`end0`) e compartilha via Wi-Fi (`wlan0`) como Access Point, com NAT e DHCP para os clientes.
-
 ---
 
 ## Pré-requisitos
 
 - TV Box com SoC **Rockchip RK322x** (RK3228A ou RK3229)
-- Cartão **microSD** de pelo menos 8 GB
-- Cabo **Ethernet** conectado à TV Box (necessário para o compartilhamento de internet)
-- PC para gravar a imagem
+- Cartão **microSD** de pelo menos 8 GB (para instalação inicial)
+- Cabo **Ethernet** conectado à TV Box
 - Acesso **SSH** à TV Box após o primeiro boot
 
 ---
 
 ## Quick Start
 
-> Para quem quer reproduzir o projeto do zero, com os mesmos resultados.
-
 ### 1 — Instalar o Armbian
 
-Baixe o **Armbian Imager** em [imager.armbian.com](https://imager.armbian.com), selecione a placa `rk322x-box`, escolha a imagem **Debian 13 Minimal** e grave no cartão microSD. Configure usuário, senha e Wi-Fi no Autoconfig Profile antes de gravar.
+Baixe o **Armbian Imager** em [imager.armbian.com](https://imager.armbian.com), selecione `rk322x-box`, escolha **Debian 13 Minimal** e grave no microSD com o Autoconfig Profile configurado (usuário, senha, Wi-Fi, timezone).
 
-Insira o cartão na TV Box e ligue. Aguarde o primeiro boot (~2-3 min) e acesse via SSH.
-
-### 2 — Instalar o driver Wi-Fi
+### 2 — Clonar o repositório na TV Box
 
 ```bash
-# Na TV Box, via SSH
 git clone https://github.com/caioamorimr/tv-box-linux.git
 cd tv-box-linux
+```
+
+### 3 — Instalar o driver Wi-Fi
+
+```bash
 sudo bash scripts/01-install-wifi-driver.sh
 sudo reboot
 ```
 
-Após o reboot, confirme:
+O script detecta automaticamente o chip (RSV6200A ou SSV6X5X) e instala o driver correto. Após o reboot:
 
 ```bash
 ip link show wlan0
 # Esperado: state UP
 ```
 
-### 3 — Configurar o Access Point
+### 4 — Configurar o Access Point
 
-Edite as variáveis no topo do script (SSID, senha, canal):
+Edite as variáveis no topo do script:
 
 ```bash
 nano scripts/02-setup-ap.sh
+# Ajuste: SSID, PASSPHRASE, CHANNEL, AP_IP, WAN_IFACE
 ```
 
 Execute:
@@ -120,7 +141,14 @@ Execute:
 sudo bash scripts/02-setup-ap.sh
 ```
 
-O hotspot estará no ar imediatamente. Conecte um dispositivo à rede configurada e acesse a internet.
+### 5 — Instalar na eMMC (permanente)
+
+```bash
+sudo armbian-config
+# System → Storage → TO001 (Copy running system)
+# Selecione eMMC → Boot from eMMC → ext4
+# Power off → remova o SD → ligue
+```
 
 ---
 
@@ -131,37 +159,38 @@ tv-box-linux/
 ├── README.md
 │
 ├── docs/
-│   ├── 01-identificacao-hardware.md   ← SoC, chip Wi-Fi, como identificar
-│   ├── 02-instalacao-armbian.md       ← Imager, gravação, primeiro boot
-│   ├── 03-driver-wifi-ssv6x5x.md     ← Causa raiz, DKMS, blacklist
-│   └── 04-access-point.md            ← hostapd, dnsmasq, NAT, iptables
+│   ├── 01-identificacao-hardware.md    ← SoC, chips Wi-Fi, como identificar
+│   ├── 02-instalacao-armbian.md        ← Imager, gravação, primeiro boot
+│   ├── 03-driver-wifi-ssv6x5x.md      ← Chip SSV6501P: DKMS, blacklist ssv6051
+│   ├── 03b-driver-wifi-rsv6200a.md    ← Chip RSV6200A: driver nativo ssv6051
+│   └── 04-access-point.md             ← hostapd, dnsmasq, NAT, iptables
 │
 ├── configs/
-│   ├── hostapd.conf                   ← Configuração do Access Point
-│   ├── dnsmasq.conf                   ← Configuração do DHCP
-│   ├── blacklist-ssv6051.conf         ← Blacklist do módulo conflitante
-│   ├── ssv6x5x.conf                   ← Paths do firmware do driver
-│   ├── ssv6x5x-wifi.cfg              ← Firmware de configuração do chip
-│   ├── sysctl.conf                    ← IP forwarding persistente
-│   └── rc.local                       ← IP fixo do wlan0 no boot
+│   ├── hostapd.conf                    ← Configuração do Access Point
+│   ├── dnsmasq.conf                    ← Configuração do DHCP
+│   ├── blacklist-ssv6051.conf          ← Blacklist para TV boxes com SSV6X5X
+│   ├── blacklist-ssv6x5x.conf         ← Blacklist para TV boxes com RSV6200A
+│   ├── ssv6x5x.conf                    ← Paths do firmware do driver SSV6X5X
+│   ├── ssv6x5x-wifi.cfg               ← Firmware de configuração do chip
+│   ├── 99-ip-forward.conf             ← IP forwarding persistente (sysctl.d)
+│   └── rc.local                        ← IP fixo + ordem de boot dos serviços
 │
 └── scripts/
-    ├── 01-install-wifi-driver.sh      ← Instalação automatizada do driver
-    └── 02-setup-ap.sh                 ← Configuração automatizada do AP
+    ├── 01-install-wifi-driver.sh       ← Detecção de chip + instalação automática
+    └── 02-setup-ap.sh                  ← Configuração completa do AP
 ```
 
 ---
 
 ## Documentação Detalhada
 
-Cada etapa do projeto está documentada em detalhes na pasta `docs/`:
-
 | Arquivo | Conteúdo |
 |---|---|
-| [01 — Identificação do Hardware](docs/01-identificacao-hardware.md) | Como identificar o SoC RK322x e o chip Wi-Fi SSV6X5X; diagrama do hardware |
-| [02 — Instalação do Armbian](docs/02-instalacao-armbian.md) | Escolha da imagem, gravação com Armbian Imager, Autoconfig Profile, primeiro boot |
-| [03 — Driver Wi-Fi SSV6X5X](docs/03-driver-wifi-ssv6x5x.md) | Causa raiz do problema (`calibration fail`), compilação via DKMS, blacklist do `ssv6051` |
-| [04 — Access Point](docs/04-access-point.md) | hostapd com nl80211, dnsmasq, NAT via iptables, ip_forward, persistência no boot |
+| [01 — Identificação do Hardware](docs/01-identificacao-hardware.md) | Como identificar SoC e chip Wi-Fi; variantes RSV6200A vs SSV6X5X |
+| [02 — Instalação do Armbian](docs/02-instalacao-armbian.md) | Escolha da imagem, gravação, Autoconfig Profile, primeiro boot |
+| [03 — Driver SSV6X5X](docs/03-driver-wifi-ssv6x5x.md) | Chip SSV6501P/SV6256P: compilação via DKMS, blacklist do ssv6051 |
+| [03b — Driver RSV6200A](docs/03b-driver-wifi-rsv6200a.md) | Chip RSV6200A: driver nativo ssv6051, blacklist do ssv6x5x |
+| [04 — Access Point](docs/04-access-point.md) | hostapd, dnsmasq, NAT, ip_forward, NM unmanaged, timing de boot |
 
 ---
 
@@ -169,14 +198,18 @@ Cada etapa do projeto está documentada em detalhes na pasta `docs/`:
 
 | Componente | Status |
 |---|---|
-| Armbian/Debian 13 rodando do cartão SD | ✅ |
+| Armbian/Debian 13 instalado na eMMC | ✅ |
+| Detecção automática do chip Wi-Fi | ✅ |
 | Driver SSV6X5X instalado via DKMS | ✅ |
+| Driver RSV6200A (ssv6051) nativo funcionando | ✅ |
 | `wlan0` em estado UP após o boot | ✅ |
 | Access Point Wi-Fi WPA2 no ar | ✅ |
 | Clientes recebendo IP via DHCP | ✅ |
-| Internet compartilhada via NAT (Ethernet → Wi-Fi) | ✅ |
-| Configurações persistindo após reboot | ✅ |
-| Driver recompilado automaticamente em updates de kernel | ✅ |
+| Internet compartilhada via NAT | ✅ |
+| NetworkManager bloqueado de interferir no wlan0 | ✅ |
+| ip_forward persistente via sysctl.d | ✅ |
+| Ordem correta de inicialização no boot (rc.local) | ✅ |
+| Driver recompilado automaticamente em updates de kernel (DKMS) | ✅ |
 
 ---
 
@@ -184,29 +217,70 @@ Cada etapa do projeto está documentada em detalhes na pasta `docs/`:
 
 ### `wlan0` em estado DOWN após o boot
 
-**Causa:** O módulo `ssv6051` (errado) carregava antes do `ssv6x5x` (correto) e corrompia o estado do chip no barramento SDIO.
+**Causa:** Módulo conflitante (`ssv6051` ou `ssv6x5x`) carregando antes do driver correto e corrompendo o estado do chip no barramento SDIO.
 
-**Solução:** Blacklist permanente do `ssv6051` com atualização do initramfs:
-
+**Diagnóstico:**
 ```bash
-echo "blacklist ssv6051" | sudo tee /etc/modprobe.d/blacklist-ssv6051.conf
-sudo update-initramfs -u
-sudo reboot
+dmesg | grep -i "chip id"     # identificar o chip
+lsmod | grep ssv              # ver qual módulo está carregado
+```
+
+**Solução:** Aplicar o blacklist correto para o chip presente e atualizar o initramfs. O script `01-install-wifi-driver.sh` faz isso automaticamente.
+
+---
+
+### Rede do hotspot não aparece para outros dispositivos
+
+**Causa mais comum:** NetworkManager conectou o `wlan0` como cliente em uma rede Wi-Fi local, impedindo o hostapd de operar em modo AP.
+
+**Diagnóstico:**
+```bash
+iw dev wlan0 info
+# Se mostrar "type managed" e "ssid <nome_de_rede>", o NM tomou a interface
+```
+
+**Solução:**
+```bash
+sudo tee /etc/NetworkManager/conf.d/unmanaged-wlan0.conf << 'EOF'
+[keyfile]
+unmanaged-devices=interface-name:wlan0
+EOF
+sudo systemctl restart NetworkManager
+sudo systemctl restart hostapd
 ```
 
 ---
 
-### `RTNETLINK answers: Operation not permitted` ao subir `wlan0`
+### dnsmasq falha com "unknown interface wlan0"
 
-Sintoma do mesmo problema acima — o módulo errado havia bloqueado o barramento SDIO. A solução é a mesma.
+**Causa:** O dnsmasq iniciou antes do `wlan0` estar configurado com IP — problema de timing no boot.
+
+**Solução:** O `rc.local` deve reiniciar o dnsmasq **depois** de configurar o IP no `wlan0`. Já está incluído no script `02-setup-ap.sh`.
 
 ---
 
-### `nmcli device wifi hotspot` falha com "device not available"
+### ip_forward volta a 0 após reboot
 
-**Causa:** O `wpa_supplicant` não consegue assumir o controle do `wlan0` via NetworkManager com este driver.
+**Causa:** O `/etc/sysctl.conf` é processado tarde demais no boot pelo Armbian.
 
-**Solução:** Usar o `hostapd` diretamente (veja o script `02-setup-ap.sh`).
+**Solução:**
+```bash
+echo "net.ipv4.ip_forward=1" | sudo tee /etc/sysctl.d/99-ip-forward.conf
+sudo sysctl -p /etc/sysctl.d/99-ip-forward.conf
+```
+
+---
+
+### Erro de headers no DKMS: "cannot be found at /lib/modules/.../build"
+
+**Causa:** Versão do kernel diferente da versão dos headers instalados.
+
+**Solução:**
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo reboot
+# Rodar o script novamente após o reboot
+```
 
 ---
 
