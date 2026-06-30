@@ -130,11 +130,10 @@ log "dnsmasq configurado: /etc/dnsmasq.conf"
 info "Ativando IP forwarding..."
 echo 1 > /proc/sys/net/ipv4/ip_forward
 
-# Tornar permanente
-sed -i '/ip_forward/d' /etc/sysctl.conf
-echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-sysctl -p -q
-log "IP forwarding ativado e persistido em /etc/sysctl.conf"
+# Tornar permanente via sysctl.d (processado pelo systemd antes dos serviços de rede)
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ip-forward.conf
+sysctl -p /etc/sysctl.d/99-ip-forward.conf -q
+log "IP forwarding ativado e persistido em /etc/sysctl.d/99-ip-forward.conf"
 
 # --- Configurar NAT via iptables ---
 info "Configurando NAT (iptables)..."
