@@ -31,7 +31,7 @@ echo ""
 
 ARCH=$(uname -m)
 KERNEL=$(uname -r)
-info "Kernel    : $KERNEL"
+info "Kernel     : $KERNEL"
 info "Arquitetura: $ARCH"
 [ "$ARCH" = "armv7l" ] || warn "Arquitetura inesperada: $ARCH (esperado: armv7l)"
 
@@ -41,7 +41,28 @@ apt-get update -qq
 apt-get upgrade -y -qq
 log "Sistema atualizado."
 
-# Reler kernel após possível atualização
+# --- Verificar se reboot é necessário antes de prosseguir ---
+# O apt upgrade pode ter instalado um kernel novo. Se o kernel atual não bater
+# com os headers recém-instalados, o DKMS vai falhar. Detectamos isso cedo
+# via /var/run/reboot-required, criado automaticamente pelo apt quando o kernel
+# é atualizado.
+if [ -f /var/run/reboot-required ]; then
+    echo ""
+    echo "============================================="
+    warn "Reboot necessário antes de continuar."
+    echo "============================================="
+    echo ""
+    echo " O apt upgrade instalou um novo kernel."
+    echo " O sistema precisa reiniciar para carregá-lo"
+    echo " antes de compilar o driver."
+    echo ""
+    echo " Após o reboot, execute novamente:"
+    echo "   sudo bash scripts/01-install-wifi-driver.sh"
+    echo ""
+    exit 0
+fi
+
+# Reler kernel após possível atualização sem reboot
 KERNEL=$(uname -r)
 
 # --- Instalar dependências base ---
@@ -49,15 +70,26 @@ info "Instalando dependências..."
 apt-get install -y dkms build-essential git linux-headers-current-rockchip
 log "Dependências instaladas."
 
-# Verificar headers
+# Verificar se os headers estão no lugar certo
 if [ ! -d "/lib/modules/$KERNEL/build" ]; then
-    err "Headers não encontrados em /lib/modules/$KERNEL/build. Tente reiniciar e rodar o script novamente."
+    echo ""
+    echo "============================================="
+    err "Headers não encontrados em /lib/modules/$KERNEL/build."
+    echo "============================================="
+    echo ""
+    echo " Isso pode indicar que o kernel foi atualizado"
+    echo " mas o sistema ainda não foi reiniciado."
+    echo ""
+    echo " Reinicie e execute o script novamente:"
+    echo "   sudo reboot"
+    echo ""
+    exit 1
 fi
 log "Headers confirmados: /lib/modules/$KERNEL/build"
 
 # =============================================================================
 # DETECÇÃO DO CHIP WI-FI
-# Carrega ssv6051 (nativo, sempre disponível) temporariamente para ler o Chip ID
+# Carrega ssv6051 (nativo) temporariamente para ler o Chip ID via SDIO
 # =============================================================================
 info "Detectando chip Wi-Fi via barramento SDIO..."
 
@@ -101,7 +133,7 @@ blacklist ssv6x5x
 EOF
     log "Blacklist aplicado: /etc/modprobe.d/blacklist-ssv6x5x.conf"
 
-    # Remover blacklist do ssv6051 se existir (vindo de outra execução)
+    # Remover blacklist do ssv6051 se existir de execução anterior
     rm -f /etc/modprobe.d/blacklist-ssv6051.conf
     warn "blacklist-ssv6051.conf removido (ssv6051 é o driver correto para este chip)."
 
@@ -125,7 +157,7 @@ EOF
     fi
 
     CALIB=$(dmesg | grep -i "calibration" | tail -1)
-    echo "  Calibração: $CALIB"
+    echo " Calibração: $CALIB"
 
 # =============================================================================
 # FLUXO SSV6X5X — Driver externo via DKMS
@@ -141,7 +173,7 @@ blacklist ssv6200
 EOF
     log "Blacklist aplicado: /etc/modprobe.d/blacklist-ssv6051.conf"
 
-    # Remover blacklist do ssv6x5x se existir
+    # Remover blacklist do ssv6x5x se existir de execução anterior
     rm -f /etc/modprobe.d/blacklist-ssv6x5x.conf
 
     info "Clonando repositório do driver..."
@@ -162,7 +194,7 @@ EOF
     cat > /etc/modprobe.d/ssv6x5x.conf << 'EOF'
 options ssv6x5x stacfgpath="/lib/firmware/ssv6x5x-wifi.cfg" cfgfirmwarepath="/lib/firmware/ssv6x5x-sw.bin"
 EOF
-    log "Parâmetros do firmware configurados: /etc/modprobe.d/ssv6x5x.conf"
+    log "Parâmetros do firmware: /etc/modprobe.d/ssv6x5x.conf"
 
     info "Atualizando initramfs..."
     update-initramfs -u

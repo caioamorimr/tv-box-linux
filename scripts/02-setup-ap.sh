@@ -59,7 +59,7 @@ echo ""
 # --- Verificações iniciais ---
 [ "$(id -u)" -eq 0 ] || err "Execute como root: sudo bash $0"
 ip link show "$AP_IFACE" &>/dev/null  || err "Interface $AP_IFACE não encontrada. O driver Wi-Fi está instalado e o sistema reiniciado?"
-ip link show "$WAN_IFACE" &>/dev/null || err "Interface $WAN_IFACE não encontrada. Verifique o nome da interface Ethernet com: ip link show"
+ip link show "$WAN_IFACE" &>/dev/null || err "Interface $WAN_IFACE não encontrada. Verifique o nome com: ip link show"
 [ ${#PASSPHRASE} -ge 8 ] || err "A senha deve ter no mínimo 8 caracteres."
 
 # --- Instalar dependências ---
@@ -102,13 +102,25 @@ log "IP $AP_IP atribuído a $AP_IFACE."
 info "Configurando hostapd..."
 systemctl unmask hostapd
 
+# Criar diretório do socket de controle
+mkdir -p /run/hostapd
+
 cat > /etc/hostapd/hostapd.conf << EOF
+# Interface e driver
 interface=${AP_IFACE}
 driver=nl80211
+
+# Socket de controle — necessário para hostapd_cli (monitorar clientes)
+ctrl_interface=/run/hostapd
+ctrl_interface_group=0
+
+# Configurações da rede Wi-Fi
 ssid=${SSID}
 hw_mode=g
 channel=${CHANNEL}
 wmm_enabled=0
+
+# Segurança WPA2
 auth_algs=1
 wpa=2
 wpa_passphrase=${PASSPHRASE}
@@ -152,22 +164,24 @@ info "Configurando NAT (iptables)..."
 # Limpar regras anteriores para evitar duplicatas
 iptables -t nat -D POSTROUTING -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null || true
 iptables -D FORWARD -i "$AP_IFACE" -o "$WAN_IFACE" -j ACCEPT 2>/dev/null || true
-iptables -D FORWARD -i "$WAN_IFACE" -o "$AP_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+iptables -D FORWARD -i "$WAN_IFACE" -o "$AP_IFACE" -m state \
+    --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 
 iptables -t nat -A POSTROUTING -o "$WAN_IFACE" -j MASQUERADE
 iptables -A FORWARD -i "$AP_IFACE" -o "$WAN_IFACE" -j ACCEPT
-iptables -A FORWARD -i "$WAN_IFACE" -o "$AP_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -A FORWARD -i "$WAN_IFACE" -o "$AP_IFACE" -m state \
+    --state RELATED,ESTABLISHED -j ACCEPT
 
 netfilter-persistent save
 log "Regras de NAT configuradas e salvas."
 
-# --- IP fixo e ordem de inicialização persistentes no boot via rc.local ---
-# O rc.local garante:
-# 1. Aguardar o driver Wi-Fi inicializar completamente (sleep 5)
-# 2. Parar NM/wpa_supplicant antes de configurar o wlan0
-# 3. Configurar IP fixo no wlan0
-# 4. Reiniciar dnsmasq APÓS o wlan0 estar configurado (evita "unknown interface")
-# 5. Reiniciar hostapd por último
+# --- Inicialização persistente no boot via rc.local ---
+# O rc.local garante a ordem correta de inicialização:
+# 1. Aguarda o driver Wi-Fi inicializar (sleep 5)
+# 2. Para NM/wpa_supplicant antes de configurar o wlan0
+# 3. Configura IP fixo no wlan0
+# 4. Reinicia dnsmasq APÓS o wlan0 estar configurado (evita "unknown interface")
+# 5. Reinicia hostapd por último
 info "Configurando inicialização persistente no boot (rc.local)..."
 cat > /etc/rc.local << EOF
 #!/bin/bash
@@ -186,6 +200,9 @@ ip addr add ${AP_IP}/24 dev ${AP_IFACE}
 ip link set ${AP_IFACE} up
 sleep 2
 
+# Criar diretório do socket de controle do hostapd se não existir
+mkdir -p /run/hostapd
+
 # Reiniciar serviços APÓS o ${AP_IFACE} estar configurado
 systemctl restart dnsmasq
 systemctl restart hostapd
@@ -203,6 +220,7 @@ log "hostapd e dnsmasq habilitados."
 
 # --- Iniciar serviços agora ---
 info "Iniciando serviços..."
+mkdir -p /run/hostapd
 systemctl restart dnsmasq
 sleep 1
 systemctl start hostapd
@@ -218,17 +236,20 @@ DNSMASQ_STATUS=$(systemctl is-active dnsmasq)
 FORWARD=$(cat /proc/sys/net/ipv4/ip_forward)
 IP_CHECK=$(ip addr show "$AP_IFACE" | grep -c "$AP_IP" || true)
 IFACE_MODE=$(iw dev "$AP_IFACE" info 2>/dev/null | grep type | awk '{print $2}')
+SOCKET_OK=$([ -S "/run/hostapd/${AP_IFACE}" ] && echo "yes" || echo "no")
 
-[ "$AP_STATUS" = "active" ]      && log "hostapd: active (running)" \
+[ "$AP_STATUS" = "active" ]      && log "hostapd        : active (running)" \
                                    || warn "hostapd: $AP_STATUS — verifique: journalctl -u hostapd"
-[ "$DNSMASQ_STATUS" = "active" ] && log "dnsmasq: active (running)" \
+[ "$DNSMASQ_STATUS" = "active" ] && log "dnsmasq        : active (running)" \
                                    || warn "dnsmasq: $DNSMASQ_STATUS — verifique: journalctl -u dnsmasq"
-[ "$FORWARD" = "1" ]             && log "IP forwarding: ativado" \
+[ "$FORWARD" = "1" ]             && log "IP forwarding  : ativado" \
                                    || warn "IP forwarding: DESATIVADO"
-[ "$IP_CHECK" -ge 1 ]            && log "IP $AP_IP atribuído a $AP_IFACE" \
+[ "$IP_CHECK" -ge 1 ]            && log "IP no $AP_IFACE : $AP_IP" \
                                    || warn "IP $AP_IP não encontrado em $AP_IFACE"
-[ "$IFACE_MODE" = "AP" ]         && log "Modo da interface: AP" \
-                                   || warn "Modo da interface: $IFACE_MODE (esperado: AP)"
+[ "$IFACE_MODE" = "AP" ]         && log "Modo $AP_IFACE  : AP" \
+                                   || warn "Modo $AP_IFACE: $IFACE_MODE (esperado: AP)"
+[ "$SOCKET_OK" = "yes" ]         && log "Socket hostapd : /run/hostapd/$AP_IFACE" \
+                                   || warn "Socket de controle não encontrado — hostapd_cli pode não funcionar"
 
 echo ""
 echo "============================================="
