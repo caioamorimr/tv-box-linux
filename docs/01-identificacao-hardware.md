@@ -14,6 +14,7 @@ O primeiro desafio ao trabalhar com TV Boxes genéricas é identificar com preci
 | Arquitetura | ARMv7l — 32 bits (Cortex-A7) |
 | Chip Wi-Fi (variante 1) | SSV6501P / SV6256P (família SSV6X5X) — barramento SDIO |
 | Chip Wi-Fi (variante 2) | RSV6200A (Rockchip South Valley) — barramento SDIO |
+| Chip Wi-Fi (variante 3) | Realtek RTL8723BS — barramento SDIO |
 | Interface Ethernet | Embutida no SoC (driver stmmac) — identificada como `end0` |
 | Memória RAM | ~1 GB DDR3 |
 | Armazenamento interno | eMMC (continha Android de fábrica) |
@@ -47,43 +48,67 @@ cat /etc/os-release | head -5
 
 ---
 
-## ⚠️ Identificar o Chip Wi-Fi ANTES de Instalar Drivers
+## Identificar o chip Wi-Fi antes de instalar drivers
 
-Este é o passo mais importante. Mesmo dentro da família RK322x, o chip Wi-Fi varia entre fabricantes e lotes de produção. O driver errado faz o chip falhar silenciosamente.
+Este é o passo mais importante. Mesmo dentro da família RK322x, o chip Wi-Fi varia entre fabricantes e lotes de produção, e o driver errado faz o chip falhar sem mensagem clara. Três variantes já apareceram em campo: Realtek RTL8723BS, RSV6200A e SSV6501P / SV6256P.
 
-**Execute antes de qualquer instalação:**
+### Por que não dá para usar o `ssv6051` como sonda
+
+Carregar o `ssv6051` parece o caminho óbvio, mas ele falha com a mesma saída nos dois chips SSV (`Please redefine xtal_clock(wifi.cfg)!!` seguido de `Failed to initialize device`). Como o resultado é idêntico, ele não diz qual chip está presente.
+
+Quem lê o Chip ID de verdade é o `ssv6x5x`. Ele imprime a string exata do chip e inicializa com sucesso, ou rejeita o chip com erro -22 quando ele não é da família SSV6X5X. Por isso a sondagem usa o `ssv6x5x`, compilado via DKMS, mesmo nas unidades que no fim usam o `ssv6051`.
+
+> Não procure o texto `RSV6200` no dmesg. A string de chip que aparece nos logs é `SSV6200Ax-...`, nunca `RSV6200x`. "RSV6200A" é só o nome adotado para essa família. Uma checagem de texto em cima desse nome identifica o chip errado.
+
+### Ordem de checagem
+
+1. Realtek primeiro. O driver nativo `r8723bs` se liga sozinho ao dispositivo quando o SDIO é enumerado, bem antes de qualquer script rodar, e deixa rastro no dmesg:
 
 ```bash
-# Carregar temporariamente o ssv6051 (nativo, sempre disponível no kernel)
-sudo modprobe ssv6051
-sleep 3
+dmesg | grep -i rtl8723bs
+```
 
-# Ler o Chip ID
-dmesg | grep -i "chip id" | tail -1
+2. Se não for Realtek, instale o `ssv6x5x` via DKMS (doc 03) e carregue:
+
+```bash
+sudo modprobe ssv6x5x
+sleep 4
+dmesg | grep -iE "CHIP ID:|error -22"
+sudo rmmod ssv6x5x
 ```
 
 ### Interpretando o resultado
 
-| Saída do dmesg | Chip | Driver correto | Documentação |
+| O que aparece no dmesg | Chip | Driver correto | Documentação |
 |---|---|---|---|
-| `CHIP ID: RSV6200A0-...` | RSV6200A | `ssv6051` (nativo) | `03b-driver-wifi-rsv6200a.md` |
-| `CHIP ID: SSV6006C0` ou similar | SSV6501P / SV6256P | `ssv6x5x` (compilar via DKMS) | `03-driver-wifi-ssv6x5x.md` |
+| `rtl8723bs` sem você ter carregado nada | Realtek RTL8723BS | `r8723bs` (nativo) | este documento |
+| `CHIP ID: SSV6006C0` (ou outro `SSV...`) e inicialização bem-sucedida | SSV6501P / SV6256P | `ssv6x5x` (DKMS) | `03-driver-wifi-ssv6x5x.md` |
+| `probe with driver ssv6x5x failed with error -22` | RSV6200A | `ssv6051` (nativo) | `03b-driver-wifi-rsv6200a.md` |
 
-> O script `01-install-wifi-driver.sh` já faz essa detecção automaticamente.
+> O script `01-install-wifi-driver.sh` faz essa detecção automaticamente.
 
 ---
 
-## Variantes de Chip Wi-Fi Conhecidas no RK322x
+## Variantes de chip Wi-Fi conhecidas no RK322x
 
 | Chip | Driver | Compilação | Firmware externo |
 |---|---|---|---|
-| SSV6501P / SV6256P (família SSV6X5X) | `ssv6x5x` | ✅ Via DKMS | ✅ Necessário |
-| RSV6200A (Rockchip South Valley) | `ssv6051` | ❌ Nativo no kernel | ❌ Não necessário |
+| SSV6501P / SV6256P (família SSV6X5X) | `ssv6x5x` | Via DKMS | Necessário (`ssv6x5x-sw.bin` e `ssv6x5x-wifi.cfg`) |
+| RSV6200A | `ssv6051` | Nativo no kernel | `ssv6051-sw.bin`: já vem no Armbian; em imagens montadas do zero, instale à parte (doc 03b) |
+| Realtek RTL8723BS | `r8723bs` | Nativo no kernel | Necessário: pacote `firmware-realtek` |
 
-**Ambos os chips:**
-- Conectam ao SoC via barramento **SDIO** (não USB — invisíveis ao `lsusb`)
-- Não possuem suporte no kernel mainline sem configuração adicional
-- Conflitam entre si se os dois drivers carregarem simultaneamente — blacklist é obrigatório
+Todos os chips:
+- Conectam ao SoC pelo barramento SDIO (não USB, então não aparecem no `lsusb`).
+- Não têm suporte no kernel mainline sem configuração adicional (no caso dos SSV).
+- Os dois drivers SSV conflitam se carregarem ao mesmo tempo, então o blacklist é obrigatório.
+
+### Realtek RTL8723BS e o firmware
+
+Sem o pacote `firmware-realtek`, o `r8723bs` carrega e a `wlan0` aparece, mas o rádio nunca recebe firmware (`Direct firmware load ... failed with error -2`). O AP fica no ar sem transmitir nada, e nenhum serviço de rede reclama.
+
+```bash
+sudo apt install firmware-realtek
+```
 
 ---
 
@@ -114,9 +139,9 @@ ip link show
 │  └──────┬─────────────┬───────┘     │
 │         │ SDIO        │ GMAC        │
 │  ┌──────▼──────┐  ┌───▼───────┐     │
-│  │ SSV6501P    │  │ Ethernet  │     │
-│  │ ou RSV6200A │  │  (end0)   │     │
-│  │ Wi-Fi 2.4G  │  │           │     │
+│  │ SSV6501P,   │  │ Ethernet  │     │
+│  │ RSV6200A ou │  │  (end0)   │     │
+│  │ RTL8723BS   │  │           │     │
 │  └─────────────┘  └───────────┘     │
 │                                     │
 │  ┌──────────┐    ┌──────────────┐   │

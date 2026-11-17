@@ -21,29 +21,26 @@ Durante o processo de instalação em múltiplas TV boxes com SoC RK322x, foi de
 
 ## Como Identificar o Chip RSV6200A
 
-Antes de instalar qualquer driver, identifique qual chip está presente:
+O RSV6200A é identificado por exclusão, e o sinal vem do `ssv6x5x`, não do `ssv6051`. O `ssv6051` falha com a mesma saída nos dois chips SSV, então não serve para distingui-los (detalhes no doc 01). O `ssv6x5x` rejeita explicitamente um chip que não é da família dele:
 
 ```bash
-# Carregar temporariamente o ssv6051 (nativo, sempre disponível)
-sudo modprobe ssv6051
-sleep 3
-
-# Ler o Chip ID do dmesg
-dmesg | grep -i "chip id" | tail -1
+# com o ssv6x5x instalado via DKMS (doc 03)
+sudo modprobe ssv6x5x
+sleep 4
+dmesg | grep -iE "CHIP ID:|error -22"
+sudo rmmod ssv6x5x
 ```
 
-Saída esperada para RSV6200A:
+Saída para RSV6200A:
+
 ```
-ssv6200: chip id: RSV6200A0-201311, tag: 2014012420010960
+ssv6x5x RSV6200A: Failed to initialize device
+ssv6x5x RSV6200A: probe with driver ssv6x5x failed with error -22
 ```
 
-Saída esperada para SSV6501P/SV6256P (ver doc 03):
-```
-TU_SSV6XXX_SDIO: CHIP ID: SSV6006C0
-```
+Saída para SSV6501P / SV6256P (doc 03): uma linha `CHIP ID: SSV6006C0` (ou outro `SSV...`) e inicialização bem-sucedida.
 
-> Se aparecer `RSV6200A`, siga este documento.
-> Se aparecer outro ID, siga o documento `03-driver-wifi-ssv6x5x.md`.
+> Se aparecer o erro -22, siga este documento. Se aparecer um Chip ID, siga o `03-driver-wifi-ssv6x5x.md`. Não procure o texto `RSV6200` no dmesg: a string de chip que aparece nos logs é `SSV6200Ax-...`.
 
 ---
 
@@ -54,14 +51,14 @@ TU_SSV6XXX_SDIO: CHIP ID: SSV6006C0
 | Fabricante | Rockchip South Valley | iComm Semiconductor |
 | Driver | `ssv6051` (nativo) | `ssv6x5x` (externo, via DKMS) |
 | Compilação necessária | ❌ Não | ✅ Sim |
-| Firmware externo | ❌ Não (`ssv6051-sw.bin` já no kernel) |✅ Sim |
+| Firmware externo | `ssv6051-sw.bin` já vem no Armbian; em imagens montadas do zero, instalar à parte | ✅ Sim |
 | Conflito com outro driver | `ssv6x5x` causa conflito | `ssv6051` causa conflito |
 
 ---
 
 ## O Problema
 
-Ao rodar o script `01-install-wifi-driver.sh` em uma TV box com RSV6200A, o DKMS tentou compilar o `ssv6x5x` para esta variante, o que desnecessariamente instalou o driver errado. O `ssv6x5x` carregava e tentava inicializar o chip RSV6200A, mas falhava:
+Rodar o fluxo do SSV6X5X numa TV box com RSV6200A instala o driver errado. O `ssv6x5x` carrega, tenta inicializar o chip e falha:
 
 ```bash
 dmesg | grep -i ssv
@@ -72,7 +69,7 @@ ssv6x5x RSV6200A: Failed to initialize device
 ssv6x5x RSV6200A: probe with driver ssv6x5x failed with error -22
 ```
 
-**Causa raiz:** O `ssv6x5x` não reconhece o chip RSV6200A. O driver correto para este chip é o `ssv6051`, que já está embutido no kernel do Armbian.
+**Causa raiz:** o `ssv6x5x` não reconhece o chip RSV6200A. O driver correto é o `ssv6051`, que já está embutido no kernel. Esse mesmo erro -22 é o que o script `01-install-wifi-driver.sh` usa para identificar a variante: ele compila o `ssv6x5x`, sonda o chip, e só então decide qual driver deixar ativo e qual bloquear.
 
 ---
 
@@ -115,6 +112,42 @@ ip link show wlan0
 # Calibração bem-sucedida
 dmesg | grep -i "calibration"
 # SSV WLAN driver ssv6200: Calibration successful
+```
+
+---
+
+## Em imagens montadas do zero
+
+No Armbian, o firmware do `ssv6051` já vem na imagem. Numa imagem montada com debootstrap (como o chonOS), faltam o binário de firmware e o `wifi.cfg`, e o driver falha ("Please redefine xtal_clock(wifi.cfg)!!") ou recusa o modo AP ("Operation not permitted").
+
+```bash
+sudo wget -O /lib/firmware/ssv6051-sw.bin \
+  https://raw.githubusercontent.com/armbian/firmware/master/ssv6051-sw.bin
+```
+
+O `/lib/firmware/ssv6051-wifi.cfg` precisa de `xtal_clock = 24` e `hw_cap_ap = on`, valores confirmados em teste real com um chip RSV6200A. Qualquer `hw_cap_*` no arquivo faz o driver ignorar o padrão seguro embutido e usar só o que estiver listado, então liste tudo o que for necessário:
+
+```
+firmware_path = /lib/firmware/
+
+xtal_clock = 24
+volt_regulator = 1
+
+hw_cap_2ghz = on
+hw_cap_ht = on
+hw_cap_security = on
+hw_cap_sgi_20 = on
+hw_cap_ampdu_rx = on
+hw_cap_ampdu_tx = on
+hw_cap_tdls = on
+hw_cap_5ghz = off
+hw_cap_p2p = off
+hw_cap_ap = on
+
+use_wpa2_only = 1
+
+wifi_tx_gain_level_b = 2
+wifi_tx_gain_level_gn = 5
 ```
 
 ---
@@ -174,7 +207,7 @@ Esta lógica já está incluída no script `02-setup-ap.sh`.
 | Hipótese | Teste | Resultado |
 |---|---|---|
 | Driver ausente | `lsmod \| grep ssv` | ssv6x5x carregado (errado) |
-| Chip incompatível | `dmesg \| grep "chip id"` | RSV6200A — não suportado pelo ssv6x5x |
+| Chip incompatível | `dmesg \| grep "error -22"` | o ssv6x5x rejeita o chip: é RSV6200A |
 | Driver correto | `modprobe ssv6051` | Calibration successful |
 | NM interferindo | `iw dev wlan0 info` | `type managed`, ssid da rede local |
 | Timing de boot | `journalctl -u dnsmasq` | "unknown interface wlan0" |
